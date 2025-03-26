@@ -85,29 +85,6 @@ contract RockPapperScissors {
         _;
     }
 
-    function addPlayer(
-        Action _choice,
-        string memory _secret,
-        address playerAddress
-    ) private {
-        if (!isInListOfPlayers[playerAddress]) {
-            listOfPlayers.push(
-                Player(
-                    playerAddress,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    RockPapperScissors.Action.Rock,
-                    getCommitHash(_choice, _secret)
-                )
-            );
-            isInListOfPlayers[playerAddress] = true;
-            placeOfPlayer[playerAddress] = listOfPlayers.length - 1;
-        }
-    }
-
     constructor() {
         owner = msg.sender;
     }
@@ -226,6 +203,19 @@ contract RockPapperScissors {
         }
     }
 
+    function reset() public {
+        if (msg.sender != owner) {
+            revert RockPapperScissors__OnlyOwner();
+        }
+        actualState = State.FIRST;
+        payDay(player1Address, bet1);
+        payDay(player2Address, bet2);
+        player1Address = address(0);
+        player2Address = address(0);
+        bet1 = 0;
+        bet2 = 0;
+    }
+
     function determineLastWinner(
         Player storage player1,
         Player storage player2,
@@ -282,14 +272,27 @@ contract RockPapperScissors {
         return (lastWinner);
     }
 
-    function reset() public {
-        actualState = State.FIRST;
-        payDay(player1Address, bet1);
-        payDay(player2Address, bet2);
-        player1Address = address(0);
-        player2Address = address(0);
-        bet1 = 0;
-        bet2 = 0;
+    function addPlayer(
+        Action _choice,
+        string memory _secret,
+        address playerAddress
+    ) private {
+        if (!isInListOfPlayers[playerAddress]) {
+            listOfPlayers.push(
+                Player(
+                    playerAddress,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    RockPapperScissors.Action.Rock,
+                    getCommitHash(_choice, _secret)
+                )
+            );
+            isInListOfPlayers[playerAddress] = true;
+            placeOfPlayer[playerAddress] = listOfPlayers.length - 1;
+        }
     }
 
     function reveal(
