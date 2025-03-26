@@ -24,9 +24,6 @@
 
 pragma solidity ^0.8.18;
 
-import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
-import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
-
 error RockPapperScissors__InvalidChoice();
 error RockPapperScissors__InvalidUser();
 error RockPapperScissors__InsuficientFund();
@@ -34,6 +31,7 @@ error RockPapperScissors__EthTransferFailed();
 error RockPapperScissors__OnlyOwner();
 error RockPapperScissors__DebugError();
 error RockPapperScissors__InvalidHash();
+error RockPapperScissors__InvaliPhase();
 
 /**
  * @title A Rock paper scissors game on-chain !
@@ -41,7 +39,7 @@ error RockPapperScissors__InvalidHash();
  * @dev This implements the Chainlink VRF Version 2
  */
 
-contract RockPapperScissors is VRFConsumerBaseV2Plus {
+contract RockPapperScissors {
     enum Action {
         Rock,
         Papper,
@@ -86,7 +84,8 @@ contract RockPapperScissors is VRFConsumerBaseV2Plus {
 
     event NewpPlayerEnteredTheGame(
         address indexed playerAddress,
-        uint256 indexed playerBet
+        uint256 indexed playerBet,
+        Action indexed playerChoice
     );
 
     modifier checkChoiceValidity(Action choice) {
@@ -96,11 +95,15 @@ contract RockPapperScissors is VRFConsumerBaseV2Plus {
         _;
     }
 
-    modifier addPlayer(Action _choice, string memory _secret) {
-        if (!isInListOfPlayers[msg.sender]) {
+    function addPlayer(
+        Action _choice,
+        string memory _secret,
+        address playerAddress
+    ) private {
+        if (!isInListOfPlayers[playerAddress]) {
             listOfPlayers.push(
                 Player(
-                    msg.sender,
+                    playerAddress,
                     0,
                     0,
                     0,
@@ -110,10 +113,9 @@ contract RockPapperScissors is VRFConsumerBaseV2Plus {
                     getCommitHash(_choice, _secret)
                 )
             );
-            isInListOfPlayers[msg.sender] = true;
-            placeOfPlayer[msg.sender] = listOfPlayers.length - 1;
+            isInListOfPlayers[playerAddress] = true;
+            placeOfPlayer[playerAddress] = listOfPlayers.length - 1;
         }
-        _;
     }
 
     constructor() {
@@ -164,10 +166,33 @@ contract RockPapperScissors is VRFConsumerBaseV2Plus {
         );
     }
 
+    function generatePseudoRandomNumber() public view returns (uint256) {
+        return (
+            uint256(
+                keccak256(abi.encodePacked(block.timestamp, block.prevrandao))
+            )
+        );
+    }
+
+    function botPlay() external {
+        if (actualState != State.SECOND) {
+            revert RockPapperScissors__InvaliPhase();
+        }
+        Action botChoice = Action(generatePseudoRandomNumber() % 3);
+        player2Address = address(this);
+        addPlayer(botChoice, "", player2Address);
+        Player storage player2 = listOfPlayers[placeOfPlayer[player2Address]];
+        player2.choice = botChoice;
+        bet2 = bet1;
+        emit NewpPlayerEnteredTheGame(player2Address, bet2, botChoice);
+        actualState = State.THIRD;
+    }
+
     function chooseYourAction(
         Action _choice,
         string memory _secret
-    ) public payable checkChoiceValidity(_choice) addPlayer(_choice, _secret) {
+    ) public payable checkChoiceValidity(_choice) {
+        addPlayer(_choice, _secret, msg.sender);
         if (actualState == State.FIRST) {
             actualState = State.SECOND;
             player1Address = msg.sender;
@@ -176,7 +201,7 @@ contract RockPapperScissors is VRFConsumerBaseV2Plus {
             ];
             player1.commit = getCommitHash(_choice, _secret);
             bet1 = msg.value;
-            emit NewpPlayerEnteredTheGame(player1Address, bet1);
+            emit NewpPlayerEnteredTheGame(player1Address, bet1, _choice);
         } else if (actualState == State.SECOND) {
             if (msg.sender == player1Address) {
                 revert RockPapperScissors__InvalidUser();
@@ -187,7 +212,7 @@ contract RockPapperScissors is VRFConsumerBaseV2Plus {
             ];
             player2.choice = _choice;
             bet2 = msg.value;
-            emit NewpPlayerEnteredTheGame(player2Address, bet2);
+            emit NewpPlayerEnteredTheGame(player2Address, bet2, _choice);
             actualState = State.THIRD;
         } else if (actualState == State.THIRD) {
             if (msg.sender != player1Address) {
@@ -267,7 +292,7 @@ contract RockPapperScissors is VRFConsumerBaseV2Plus {
         return (lastWinner);
     }
 
-    function reset() private {
+    function reset() public {
         actualState = State.FIRST;
         payDay(player1Address, bet1);
         payDay(player2Address, bet2);
