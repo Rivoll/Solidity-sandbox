@@ -10,6 +10,7 @@ contract TestRockPapperScissors is Test {
     DeployRockPapperScissors public DeployGame;
     uint256 public constant BET_SIZE = 100;
     uint256 public constant PLAYERS_ETH = 1000;
+    uint256 public constant EXPECTED_FEES = 10;
 
     function setUp() public {
         DeployGame = new DeployRockPapperScissors();
@@ -128,7 +129,7 @@ contract TestRockPapperScissors is Test {
             RockPapperScissors.Action.Rock,
             RockPapperScissors.Action.Rock
         );
-        assertEq(game.houseBalance(), 10);
+        assertEq(game.houseBalance(), EXPECTED_FEES);
     }
 
     function testResetPhase1() public {

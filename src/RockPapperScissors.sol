@@ -1,7 +1,31 @@
+// Layout of Contract:
+// version
+// imports
+// errors
+// interfaces, libraries, contracts
+// Type declarations
+// State variables
+// Events
+// Modifiers
+// Functions
+
+// Layout of Functions:
+// constructor
+// receive function (if exists)
+// fallback function (if exists)
+// external
+// public
+// internal
+// private
+// view & pure functions
+// d'abord on écrit la logique du code, ensuite on optimise le gas costs
+
 // SPDX-License-Identifier: MIT
+
 pragma solidity ^0.8.18;
 
-import {console} from "../lib/forge-std/src/Test.sol";
+import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
+import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
 
 error RockPapperScissors__InvalidChoice();
 error RockPapperScissors__InvalidUser();
@@ -11,7 +35,13 @@ error RockPapperScissors__OnlyOwner();
 error RockPapperScissors__DebugError();
 error RockPapperScissors__InvalidHash();
 
-contract RockPapperScissors {
+/**
+ * @title A Rock paper scissors game on-chain !
+ * @notice This contract is for creating a rock papper scissors game
+ * @dev This implements the Chainlink VRF Version 2
+ */
+
+contract RockPapperScissors is VRFConsumerBaseV2Plus {
     enum Action {
         Rock,
         Papper,
@@ -44,16 +74,141 @@ contract RockPapperScissors {
     mapping(address => bool) isInListOfPlayers;
     mapping(address => uint) placeOfPlayer;
 
-    /*
-    uint bet;
-    struct player {
-        Action public playerMove;
-        uint public bet;
-        address public playerAddress;
+    // chainlink VRF variables
+    uint256 s_subscriptionId;
+    address vrfCoordinator = 0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B;
+    bytes32 s_keyHash =
+        0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae;
+    uint32 callbackGasLimit = 40000;
+    uint16 requestConfirmations = 3;
+    uint32 numWords = 1;
+    //
+
+    event NewpPlayerEnteredTheGame(
+        address indexed playerAddress,
+        uint256 indexed playerBet
+    );
+
+    modifier checkChoiceValidity(Action choice) {
+        if (uint256(choice) > 2) {
+            revert RockPapperScissors__InvalidChoice();
+        }
+        _;
     }
-    */
+
+    modifier addPlayer(Action _choice, string memory _secret) {
+        if (!isInListOfPlayers[msg.sender]) {
+            listOfPlayers.push(
+                Player(
+                    msg.sender,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    RockPapperScissors.Action.Rock,
+                    getCommitHash(_choice, _secret)
+                )
+            );
+            isInListOfPlayers[msg.sender] = true;
+            placeOfPlayer[msg.sender] = listOfPlayers.length - 1;
+        }
+        _;
+    }
+
     constructor() {
         owner = msg.sender;
+    }
+
+    receive() external payable {}
+
+    fallback() external payable {}
+
+    function withdrawFees() external {
+        if (msg.sender != owner) {
+            revert RockPapperScissors__OnlyOwner();
+        }
+        uint amount = houseBalance;
+        houseBalance = 0;
+        payDay(owner, amount);
+    }
+
+    function getPlayerStats(
+        address player
+    )
+        external
+        view
+        returns (
+            address playerAddress,
+            uint256 wins,
+            uint256 defeats,
+            uint256 draws,
+            int256 score,
+            uint256 ratio,
+            uint8 choice
+        )
+    {
+        if (!isInListOfPlayers[player]) {
+            revert RockPapperScissors__InvalidUser();
+        }
+        uint index = placeOfPlayer[player];
+        Player memory p = listOfPlayers[index];
+        return (
+            p.playerAddress,
+            p.numberOfVictories,
+            p.numberOfDefeats,
+            p.numberOfEqualities,
+            p.score,
+            p.ratio,
+            uint8(p.choice)
+        );
+    }
+
+    function chooseYourAction(
+        Action _choice,
+        string memory _secret
+    ) public payable checkChoiceValidity(_choice) addPlayer(_choice, _secret) {
+        if (actualState == State.FIRST) {
+            actualState = State.SECOND;
+            player1Address = msg.sender;
+            Player storage player1 = listOfPlayers[
+                placeOfPlayer[player1Address]
+            ];
+            player1.commit = getCommitHash(_choice, _secret);
+            bet1 = msg.value;
+            emit NewpPlayerEnteredTheGame(player1Address, bet1);
+        } else if (actualState == State.SECOND) {
+            if (msg.sender == player1Address) {
+                revert RockPapperScissors__InvalidUser();
+            }
+            player2Address = msg.sender;
+            Player storage player2 = listOfPlayers[
+                placeOfPlayer[player2Address]
+            ];
+            player2.choice = _choice;
+            bet2 = msg.value;
+            emit NewpPlayerEnteredTheGame(player2Address, bet2);
+            actualState = State.THIRD;
+        } else if (actualState == State.THIRD) {
+            if (msg.sender != player1Address) {
+                revert RockPapperScissors__InvalidUser();
+            }
+            Player storage player1 = listOfPlayers[
+                placeOfPlayer[player1Address]
+            ];
+            Player storage player2 = listOfPlayers[
+                placeOfPlayer[player2Address]
+            ];
+            if (!reveal(_choice, _secret, player1.commit)) {
+                revert RockPapperScissors__InvalidHash();
+            }
+            player1.choice = _choice;
+            uint256 bet = handleBet(bet1, bet2);
+            actualState = State.FIRST;
+            determineLastWinner(player1, player2, bet);
+        } else {
+            revert RockPapperScissors__DebugError();
+        }
     }
 
     function determineLastWinner(
@@ -62,11 +217,8 @@ contract RockPapperScissors {
         uint256 bet
     ) private returns (address) {
         uint256 totalPot = bet * 2;
-        console.log(totalPot);
         uint256 fee = (totalPot * 5) / 100;
-        console.log(fee);
         uint payout = totalPot - fee;
-        console.log(payout);
         if (player1.choice == player2.choice) {
             player1.numberOfEqualities += 1;
             player2.numberOfEqualities += 1;
@@ -115,7 +267,7 @@ contract RockPapperScissors {
         return (lastWinner);
     }
 
-    function reset() public {
+    function reset() private {
         actualState = State.FIRST;
         payDay(player1Address, bet1);
         payDay(player2Address, bet2);
@@ -124,67 +276,23 @@ contract RockPapperScissors {
         bet1 = 0;
         bet2 = 0;
     }
-    function chooseYourAction(
-        Action _choice,
-        string memory _secret
-    ) public payable checkChoiceValidity(_choice) addPlayer(_choice, _secret) {
-        if (actualState == State.FIRST) {
-            actualState = State.SECOND;
-            player1Address = msg.sender;
-            Player storage player1 = listOfPlayers[
-                placeOfPlayer[player1Address]
-            ];
-            player1.commit = getCommitHash(_choice, _secret);
-            bet1 = msg.value;
-        } else if (actualState == State.SECOND) {
-            if (msg.sender == player1Address) {
-                revert RockPapperScissors__InvalidUser();
-            }
-            player2Address = msg.sender;
-            Player storage player2 = listOfPlayers[
-                placeOfPlayer[player2Address]
-            ];
-            player2.choice = _choice;
-            bet2 = msg.value;
-            actualState = State.THIRD;
-        } else if (actualState == State.THIRD) {
-            if (msg.sender != player1Address) {
-                revert RockPapperScissors__InvalidUser();
-            }
-            Player storage player1 = listOfPlayers[
-                placeOfPlayer[player1Address]
-            ];
-            Player storage player2 = listOfPlayers[
-                placeOfPlayer[player2Address]
-            ];
-            if (!reveal(_choice, _secret, player1.commit)) {
-                revert RockPapperScissors__InvalidHash();
-            }
-            player1.choice = _choice;
-            uint256 bet = handleBet(bet1, bet2);
-            actualState = State.FIRST;
-            determineLastWinner(player1, player2, bet);
-        } else {
-            revert RockPapperScissors__DebugError();
-        }
-    }
 
     function reveal(
         Action choice,
         string memory secret,
         bytes32 _commit
-    ) public returns (bool) {
+    ) private pure returns (bool) {
         return (keccak256(abi.encodePacked(choice, secret)) == _commit);
     }
 
-    function payDay(address playerToPay, uint256 value) public {
+    function payDay(address playerToPay, uint256 value) private {
         (bool sent, ) = payable(playerToPay).call{value: value}("");
         if (!sent) {
             revert RockPapperScissors__EthTransferFailed();
         }
     }
 
-    function handleBet(uint256 _bet1, uint256 _bet2) public returns (uint) {
+    function handleBet(uint256 _bet1, uint256 _bet2) private returns (uint) {
         if (_bet1 > _bet2) {
             payDay(player1Address, _bet1 - _bet2);
             return (_bet2);
@@ -194,87 +302,10 @@ contract RockPapperScissors {
         }
     }
 
-    /*
-    modifier checkBetSize(uint256 _bet) {
-        if (msg.sender.balance < _bet) {
-            revert RockPapperScissors__InsuficientFund();
-        }
-        _;
-    }
-    */
-    modifier addPlayer(Action _choice, string memory _secret) {
-        if (!isInListOfPlayers[msg.sender]) {
-            listOfPlayers.push(
-                Player(
-                    msg.sender,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    RockPapperScissors.Action.Rock,
-                    getCommitHash(_choice, _secret)
-                )
-            );
-            isInListOfPlayers[msg.sender] = true;
-            placeOfPlayer[msg.sender] = listOfPlayers.length - 1;
-        }
-        _;
-    }
-
-    modifier checkChoiceValidity(Action choice) {
-        if (uint256(choice) > 2) {
-            revert RockPapperScissors__InvalidChoice();
-        }
-        _;
-    }
-
-    function getPlayerStats(
-        address player
-    )
-        external
-        view
-        returns (
-            address playerAddress,
-            uint256 wins,
-            uint256 defeats,
-            uint256 draws,
-            int256 score,
-            uint256 ratio,
-            uint8 choice
-        )
-    {
-        if (!isInListOfPlayers[player]) {
-            revert RockPapperScissors__InvalidUser();
-        }
-        uint index = placeOfPlayer[player];
-        Player memory p = listOfPlayers[index];
-        return (
-            p.playerAddress,
-            p.numberOfVictories,
-            p.numberOfDefeats,
-            p.numberOfEqualities,
-            p.score,
-            p.ratio,
-            uint8(p.choice)
-        );
-    }
-
     function getCommitHash(
         Action choice,
         string memory secret
-    ) public pure returns (bytes32) {
+    ) private pure returns (bytes32) {
         return keccak256(abi.encodePacked(choice, secret));
     }
-
-    function withdrawFees() external {
-        if (msg.sender != owner) {
-            revert RockPapperScissors__OnlyOwner();
-        }
-        uint amount = houseBalance;
-        houseBalance = 0;
-        payDay(owner, amount);
-    }
-    receive() external payable {}
-    fallback() external payable {}
 }
